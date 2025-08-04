@@ -5,6 +5,197 @@ clc;
 close all;
 
 %____________________________________________________
+%___________________FUNCTIONS________________________
+%____________________________________________________
+
+%Select a pore électionner un pore 
+function [new_diameters,new_areas, new_centroids] = clicPore(binary_img, pixel2microm, DistanceKnow)
+    new_diameters = [];
+    new_areas = [];
+    new_centroids = [];
+    keepGoing = true;
+    while keepGoing
+        [x, y, button] = ginput(1);
+        if button ~= 1
+            keepGoing = false;
+            break;
+        end
+    
+        row = round(y);
+        col = round(x);
+        labeledImage = bwlabel(binary_img);
+        poreLabel = labeledImage(row, col);
+        
+        if poreLabel == 0
+            fprintf('No pore detected at this location. Please click inside a pore.\n');
+            continue;
+        end
+        porePixels = labeledImage == poreLabel;
+        props = regionprops(porePixels, 'MajorAxisLength', 'Centroid', 'Area');
+        
+        if isempty(props)
+            continue;
+        end
+        
+        diameter = props.MajorAxisLength;
+        centroid = props.Centroid;
+        area = props.Area;
+        exact_diameter = diameter * pixel2microm ; % Method better to find pore diameter
+        exact_area = area * pixel2microm ;
+        new_diameters = [new_diameters, exact_diameter];
+        new_areas = [new_areas, exact_area];
+        new_centroids = [new_centroids; centroid];
+        
+        hold on;
+        viscircles(centroid, diameter/2, 'EdgeColor', 'r'); 
+        text(centroid(1), centroid(2), sprintf('%.f µm', exact_diameter), ...
+             'Color', 'red', 'FontSize', 12, 'HorizontalAlignment', 'center');
+        hold off;
+
+        fprintf('Pore size: %.f µm   (%.f pixels)\n', exact_diameter, diameter); %±
+        fprintf('Area size: %.f µm   (%.f pixels)\n', exact_area, area);
+    end
+    hold off;
+end
+
+%Deselect pore
+function delete_indices = deselectPore(valid_diameters, valid_areas, valid_centroids, pixel2microm)
+    fprintf('Click on the red circle to delete it (right-click to finish).\n');
+
+    delete_indices = [];
+    keepGoing = true;
+
+    while keepGoing
+        [x, y, button] = ginput(1);
+        if button ~= 1
+            keepGoing = false;
+            break;
+        end
+
+        maxDistance = 25;
+        closest_dist = inf;
+        closest_idx = 0;
+        
+        for j = 1:size(valid_centroids, 1)
+            if ismember(j, delete_indices)
+                continue;
+            end
+            
+            % Calculate distance of click from the center 
+            dist_to_center = sqrt((valid_centroids(j,1) - x)^2 + (valid_centroids(j,2) - y)^2);
+            % Calculate radius in pixels
+            radius_pixels = valid_diameters(j) / (2 * pixel2microm);
+            
+            tolerance = 15;
+            distance_to_border = abs(dist_to_center - radius_pixels);
+            
+            if (distance_to_border < tolerance || (dist_to_center > radius_pixels && dist_to_center < radius_pixels + tolerance)) && distance_to_border < closest_dist
+                closest_dist = distance_to_border;
+                closest_idx = j;
+            end
+        end
+        
+        if closest_idx > 0
+            % Add to list of deleted pores
+            delete_indices = [delete_indices, closest_idx];
+            
+            % Delete circle 
+            allObjects = findall(gca, 'Type', 'line');
+            textObjects = findall(gca, 'Type', 'text');
+            deletedSomething = false;
+
+            for i = 1:length(allObjects)
+                obj = allObjects(i);
+                xData = get(obj, 'XData');
+                yData = get(obj, 'YData');
+                
+                if ~isempty(xData) && ~isempty(yData) && length(xData)  
+                distances = sqrt((xData - x).^2 + (yData - y).^2);
+                if min(distances) < maxDistance
+                    delete(obj);
+                end
+
+                end
+            end
+            
+            fprintf('Pore %d deleted (diameter: %.2f µm)\n', closest_idx, valid_diameters(closest_idx));
+        else
+            fprintf('No pore found near this location.\n');
+        end
+    end
+    
+    delete_indices = unique(delete_indices);
+    delete_indices = sort(delete_indices, 'descend');
+end
+
+function [binary_separated] = separateConnectedPores(binary_img)
+
+    % Calculate transform distance
+    dist_transform = bwdist(~binary_img);
+    dist_smooth = imgaussfilt(dist_transform, 4);
+   
+    % Calculate local maxima to identify potential pore centers
+    max_local = imregionalmax(dist_smooth);
+    
+    %Markers for watershed
+    markers = bwlabel(max_local);
+    
+    % Calculate the inverted distance transform for watershed segmentation
+    % (The watershed algorithm segments based on valleys, not peaks)
+    dist_neg = -dist_smooth;
+    
+    % Apply watershed
+    watershed_result = watershed(dist_neg, 18);
+    
+    % Create a mask for the boundaries between objects
+    watershed_lines = watershed_result == 0;
+    
+    % Apply the watershed lines to the original binary image
+    binary_separated = binary_img & ~watershed_lines;
+    
+    % Remove small fragments generated by the watershed 
+    binary_separated = bwareaopen(binary_separated, 50);
+    
+    % Reconstruct pores to make them more uniform
+    se = strel('disk', 3);
+    binary_separated = imclose(binary_separated, se);
+
+end
+
+function [new_centroid, new_diameter_pixels] = removeNestedCircles(centroid, diameter_pixels)
+    indices_to_keep = true(1, size(centroid, 1));
+   
+    for i = 1:size(centroid, 1)
+        % Check if this circle is inside another circle
+        for j = 1:size(centroid, 1)
+            if i == j
+                continue; % Ignore the same circle
+            end
+            
+            % Calculate the distance between the centers
+            dist = norm(centroid(i,:) - centroid(j,:));
+            total_radius = (diameter_pixels(i) + diameter_pixels(j)) / 2;
+            
+            % Check if one circle is entirely contained within another
+            if dist + min(diameter_pixels(i), diameter_pixels(j))/2 <= max(diameter_pixels(i), diameter_pixels(j))/2 || ...    
+                    (dist < total_radius)
+                 
+                    % Remove the smaller circle
+                if diameter_pixels(i) < diameter_pixels(j)
+                    indices_to_keep(i) = false;
+                else
+                    indices_to_keep(j) = false;filenames
+                end
+            end
+        end
+    end
+
+    new_centroid = centroid(indices_to_keep, :);
+    new_diameter_pixels = diameter_pixels(indices_to_keep);
+end
+     
+
+%____________________________________________________
 %_______READ AND PREPARE IMAGE TO BE ANALYSED________
 %____________________________________________________
 
@@ -435,193 +626,5 @@ end
 workbook.Save;
 fprintf('\nSave results on a file\n');
 
-%____________________________________________________
-%___________________FUNCTIONS________________________
-%____________________________________________________
+  
 
-%Select a pore électionner un pore 
-function [new_diameters,new_areas, new_centroids] = clicPore(binary_img, pixel2microm, DistanceKnow)
-    new_diameters = [];
-    new_areas = [];
-    new_centroids = [];
-    keepGoing = true;
-    while keepGoing
-        [x, y, button] = ginput(1);
-        if button ~= 1
-            keepGoing = false;
-            break;
-        end
-    
-        row = round(y);
-        col = round(x);
-        labeledImage = bwlabel(binary_img);
-        poreLabel = labeledImage(row, col);
-        
-        if poreLabel == 0
-            fprintf('No pore detected at this location. Please click inside a pore.\n');
-            continue;
-        end
-        porePixels = labeledImage == poreLabel;
-        props = regionprops(porePixels, 'MajorAxisLength', 'Centroid', 'Area');
-        
-        if isempty(props)
-            continue;
-        end
-        
-        diameter = props.MajorAxisLength;
-        centroid = props.Centroid;
-        area = props.Area;
-        exact_diameter = diameter * pixel2microm ; % Method better to find pore diameter
-        exact_area = area * pixel2microm ;
-        new_diameters = [new_diameters, exact_diameter];
-        new_areas = [new_areas, exact_area];
-        new_centroids = [new_centroids; centroid];
-        
-        hold on;
-        viscircles(centroid, diameter/2, 'EdgeColor', 'r'); 
-        text(centroid(1), centroid(2), sprintf('%.f µm', exact_diameter), ...
-             'Color', 'red', 'FontSize', 12, 'HorizontalAlignment', 'center');
-        hold off;
-
-        fprintf('Pore size: %.f µm   (%.f pixels)\n', exact_diameter, diameter); %±
-        fprintf('Area size: %.f µm   (%.f pixels)\n', exact_area, area);
-    end
-    hold off;
-end
-
-%Deselect pore
-function delete_indices = deselectPore(valid_diameters, valid_areas, valid_centroids, pixel2microm)
-    fprintf('Click on the red circle to delete it (right-click to finish).\n');
-
-    delete_indices = [];
-    keepGoing = true;
-
-    while keepGoing
-        [x, y, button] = ginput(1);
-        if button ~= 1
-            keepGoing = false;
-            break;
-        end
-
-        maxDistance = 25;
-        closest_dist = inf;
-        closest_idx = 0;
-        
-        for j = 1:size(valid_centroids, 1)
-            if ismember(j, delete_indices)
-                continue;
-            end
-            
-            % Calculate distance of click from the center 
-            dist_to_center = sqrt((valid_centroids(j,1) - x)^2 + (valid_centroids(j,2) - y)^2);
-            % Calculate radius in pixels
-            radius_pixels = valid_diameters(j) / (2 * pixel2microm);
-            
-            tolerance = 15;
-            distance_to_border = abs(dist_to_center - radius_pixels);
-            
-            if (distance_to_border < tolerance || (dist_to_center > radius_pixels && dist_to_center < radius_pixels + tolerance)) && distance_to_border < closest_dist
-                closest_dist = distance_to_border;
-                closest_idx = j;
-            end
-        end
-        
-        if closest_idx > 0
-            % Add to list of deleted pores
-            delete_indices = [delete_indices, closest_idx];
-            
-            % Delete circle 
-            allObjects = findall(gca, 'Type', 'line');
-            textObjects = findall(gca, 'Type', 'text');
-            deletedSomething = false;
-
-            for i = 1:length(allObjects)
-                obj = allObjects(i);
-                xData = get(obj, 'XData');
-                yData = get(obj, 'YData');
-                
-                if ~isempty(xData) && ~isempty(yData) && length(xData)  
-                distances = sqrt((xData - x).^2 + (yData - y).^2);
-                if min(distances) < maxDistance
-                    delete(obj);
-                end
-
-                end
-            end
-            
-            fprintf('Pore %d deleted (diameter: %.2f µm)\n', closest_idx, valid_diameters(closest_idx));
-        else
-            fprintf('No pore found near this location.\n');
-        end
-    end
-    
-    delete_indices = unique(delete_indices);
-    delete_indices = sort(delete_indices, 'descend');
-end
-
-function [binary_separated] = separateConnectedPores(binary_img)
-
-    % Calculate transform distance
-    dist_transform = bwdist(~binary_img);
-    dist_smooth = imgaussfilt(dist_transform, 4);
-   
-    % Calculate local maxima to identify potential pore centers
-    max_local = imregionalmax(dist_smooth);
-    
-    %Markers for watershed
-    markers = bwlabel(max_local);
-    
-    % Calculate the inverted distance transform for watershed segmentation
-    % (The watershed algorithm segments based on valleys, not peaks)
-    dist_neg = -dist_smooth;
-    
-    % Apply watershed
-    watershed_result = watershed(dist_neg, 18);
-    
-    % Create a mask for the boundaries between objects
-    watershed_lines = watershed_result == 0;
-    
-    % Apply the watershed lines to the original binary image
-    binary_separated = binary_img & ~watershed_lines;
-    
-    % Remove small fragments generated by the watershed 
-    binary_separated = bwareaopen(binary_separated, 50);
-    
-    % Reconstruct pores to make them more uniform
-    se = strel('disk', 3);
-    binary_separated = imclose(binary_separated, se);
-
-end
-
-function [new_centroid, new_diameter_pixels] = removeNestedCircles(centroid, diameter_pixels)
-    indices_to_keep = true(1, size(centroid, 1));
-   
-    for i = 1:size(centroid, 1)
-        % Check if this circle is inside another circle
-        for j = 1:size(centroid, 1)
-            if i == j
-                continue; % Ignore the same circle
-            end
-            
-            % Calculate the distance between the centers
-            dist = norm(centroid(i,:) - centroid(j,:));
-            total_radius = (diameter_pixels(i) + diameter_pixels(j)) / 2;
-            
-            % Check if one circle is entirely contained within another
-            if dist + min(diameter_pixels(i), diameter_pixels(j))/2 <= max(diameter_pixels(i), diameter_pixels(j))/2 || ...    
-                    (dist < total_radius)
-                 
-                    % Remove the smaller circle
-                if diameter_pixels(i) < diameter_pixels(j)
-                    indices_to_keep(i) = false;
-                else
-                    indices_to_keep(j) = false;filenames
-                end
-            end
-        end
-    end
-
-    new_centroid = centroid(indices_to_keep, :);
-    new_diameter_pixels = diameter_pixels(indices_to_keep);
-end
-       
