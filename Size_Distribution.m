@@ -481,9 +481,9 @@ std_diameter = std(all_diameters);
 median_diameter = median(all_diameters);
 cv_diameter = (std_diameter/mean_diameter) * 100 ;
 
-[ hauteur , largeur, ~] = size(I);
-fprintf('Taille : %d x %d pixels\n', largeur,  hauteur );
-total_image_surface = largeur *  hauteur ;
+[ Height , Width, ~] = size(I);
+fprintf('Taille : %d x %d pixels\n', Width,  Height );
+total_image_surface = Width *  Height ;
 total_image_surface_microm = total_image_surface *pixel2microm * pixel2microm ;
 
 black_threshold = 20; % Pixels < 20 consider black
