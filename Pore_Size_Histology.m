@@ -40,16 +40,18 @@ for k = 1:length(filenames)
     fprintf('Setting scale...\n');
     scale_value = input('What is the scale of all images (µm) : ');
     scale_length = input('What is the lenght of the scale (pixels) : ');
-    %pixel2microm = scale_value / scale_length;
-    pixel2microm = 2.13;
+    pixel2microm = scale_value / scale_length;
+    %pixel2microm = 2.13;
     fprintf('Scale: 1 pixel = %.3f µm\n', pixel2microm);
+    diameter_min = input('Entrez le diamètre minimum à détecter (µm) : ');
+    diameter_max = input('Entrez le diamètre maximum à détecter (µm) : ');
     
     % Calculate surface
-    [height, width, ~] = size(imageData);
-    total_image_surface = (height * width)*pixel2microm*pixel2microm;
+    [hauteur, largeur, ~] = size(imageData);
+    total_image_surface = (hauteur * largeur)*pixel2microm*pixel2microm;
     
     % INTERACTIV MASK MULTIPLE
-    masque_interactif = true(height, width);
+    masque_interactif = true(hauteur, largeur);
     
     % Instructions pour l'utilisateur
     fprintf('\n=== Select zones to be masked ===\n');
@@ -82,8 +84,8 @@ for k = 1:length(filenames)
                     zone_count = zone_count + 1;
                     x_rect = max(1, round(rect(1))); 
                     y_rect = max(1, round(rect(2))); 
-                    w_rect = min(round(rect(3)), width - x_rect + 1); 
-                    h_rect = min(round(rect(4)), height - y_rect + 1);
+                    w_rect = min(round(rect(3)), largeur - x_rect + 1); 
+                    h_rect = min(round(rect(4)), hauteur - y_rect + 1);
                     
                     if w_rect > 0 && h_rect > 0
                         masque_interactif(y_rect:y_rect+h_rect-1, x_rect:x_rect+w_rect-1) = false;
@@ -106,7 +108,7 @@ for k = 1:length(filenames)
     
     if zone_count == 0
         fprintf('No zone selected. Use the entire image.\n');
-        masque_interactif = true(height, width);
+        masque_interactif = true(hauteur, largeur);
     end
     
     % USE INTERACTIVE MASK
@@ -177,8 +179,9 @@ for file_idx = 1:length(filenames)
 
     CC = bwconncomp(binary_img);
     props = regionprops(CC, 'Area', 'Perimeter', 'Centroid', 'BoundingBox', 'Eccentricity', 'EquivDiameter');
-
-    valid_indices = find([props.Area] >= 0);
+    all_diameters_pixels = [props.EquivDiameter];
+    all_diameters_microm = all_diameters_pixels * pixel2microm;
+    valid_indices = find(all_diameters_microm >= diameter_min & all_diameters_microm <= diameter_max & [props.Area] >= 0);
     valid_props = props(valid_indices);
     
     % Calculate statistics of slurries 
@@ -372,18 +375,18 @@ for file_idx = 1:length(filenames)
     end
 end
 
-N = round(0.03 * numel(all_diameters));
-all_diameters_sort = sort(all_diameters,'descend');
-big_pores = all_diameters_sort(1:N);
-all_diameters(ismember(all_diameters, big_pores)) = [];
+%N = round(0.03 * numel(all_diameters));
+%all_diameters_sort = sort(all_diameters,'descend');
+%big_pores = all_diameters_sort(1:N);
+%all_diameters(ismember(all_diameters, big_pores)) = [];
 
 %____________________________________________
 %_______________STATISTICS_________________
 %____________________________________________
 
-[height, width, ~] = size(I);
-fprintf('Size : %d x %d pixels\n', width, height);
-total_image_surface = width * height;
+[hauteur, largeur, ~] = size(I);
+fprintf('Size : %d x %d pixels\n', largeur, hauteur);
+total_image_surface = largeur * hauteur;
 total_image_surface_microm = total_image_surface *pixel2microm * pixel2microm ;
 fprintf('The total image surface is : %.f pixels^2\n', total_image_surface);
 
@@ -438,10 +441,14 @@ results_table2 = table(round(all_areas,2),'VariableNames', {'Areas_microm'});
 results_table3 = table(round(mean_diameter,2),round(median_diameter,2) ,round(std_diameter,2), round(cv_diameter,2), 'VariableNames', {'mean_diameter','median_diameter','std_diameter','C.V'});
 results_table4 = table(round(mean_area,2),round(median_area,2) ,round(std_area,2), 'VariableNames', {'mean_area','median_area','std_area'});
 results_table5 = table(round(porosity,2), round(density,2),'VariableNames', {'Porosity (%)', 'Density pores/mm²'});
+fprintf('\nSave results on a file2\n');
 
 max_rows = max([height(results_table1), height(results_table2), height(results_table3),height(results_table4)]);
+%max_rows = max([hauteur(results_table1), hauteur(results_table2), hauteur(results_table3),hauteur(results_table4)]);
+fprintf('\nSave results on a file3\n');
 
-% Complete table to have the same heights
+
+% Complete table to have the same hauteurs
 results_table1 = [results_table1; array2table(nan(max_rows - height(results_table1), width(results_table1)), ...
     'VariableNames', results_table1.Properties.VariableNames)];
 
@@ -542,7 +549,7 @@ fprintf('\nSave results on a file\n');
 % Segment slurries
 function [binary_img] = segmentSlurries(grayImage)
     % Apply gaussien filter
-    grayImage = imgaussfilt(grayImage, 3); %ou 6
+    grayImage = imgaussfilt(grayImage, 3); %ou 6 ou 3
     %grayImage = medfilt2(grayImage, [3 3]);
     %grayImage = adapthisteq(grayImage);
     
@@ -554,19 +561,19 @@ function [binary_img] = segmentSlurries(grayImage)
     disp(thresh);
     binary_img = grayImage > thresh(2);
     %BIG PORES
-    binary_img = imbinarize(grayImage, 'adaptive', 'Sensitivity', 0.5, 'ForegroundPolarity', 'dark'); %TO BE MODIFIED : 0.6 
+    %binary_img = imbinarize(grayImage, 'adaptive', 'Sensitivity', 0.5, 'ForegroundPolarity', 'dark'); %TO BE MODIFIED : 0.6 
     % FOR FITC IMAGES
     %binary_img = imbinarize(grayImage, 'adaptive', 'Sensitivity', 0.99, 'ForegroundPolarity', 'bright');
     % FOR ALL PORES 
-    %binary_img = imbinarize(grayImage, 'adaptive', 'Sensitivity', 0.75,'ForegroundPolarity', 'dark'); %TO ME MODIFEID : 0.6 / 0.85 / 0.63
+    binary_img = imbinarize(grayImage, 'adaptive', 'Sensitivity', 0.75,'ForegroundPolarity', 'dark'); %TO ME MODIFEID : 0.6 / 0.85 / 0.63 / 0.75
  
     % Morphological to improve segmentation
-    se1 = strel('disk', 7); % TO BE MODIFIED 13 / 7 for big pores / 1 for all
+    se1 = strel('disk', 1); % TO BE MODIFIED 13 / 7 for big pores / 1 for all
     %For FITC se1 = strel('disk', 1);
     binary_img = imopen(binary_img, se1);
 
     % Delete very small pores that can be noise
-    binary_img = bwareaopen(binary_img, 6); % BIG PORES : 6, All 10
+    binary_img = bwareaopen(binary_img, 10); % BIG PORES : 6, All 10
     %For FITC binary_img = bwpropfilt(binary_img, 'Area', [5, Inf]); % Garde uniquement les objets plus grands que 5 pixels
     %binary_img = imcomplement (binary_img);
     imshow(binary_img);
@@ -710,7 +717,7 @@ function [new_areas, new_perimeters, new_centroids, new_diameters] = clicSlurry(
         % Visualize particule
         hold on;
         boundary = bwboundaries(slurryPixels);
-        plot(boundary{1}(:,2), boundary{1}(:,1), 'b', 'LineWidth', 2);
+        plot(boundary{1}(:,2), boundary{1}(:,1), 'b', 'Linelargeur', 2);
         
         theta = linspace(0, 2*pi, 50);
         a = props.MajorAxisLength/2;
@@ -722,11 +729,11 @@ function [new_areas, new_perimeters, new_centroids, new_diameters] = clicSlurry(
         
         x = centroid(1) + a*cos(theta)*cos(phi) - b*sin(theta)*sin(phi);
         y = centroid(2) + a*cos(theta)*sin(phi) + b*sin(theta)*cos(phi);
-        plot(x, y, 'b-', 'LineWidth', 1);
+        plot(x, y, 'b-', 'Linelargeur', 1);
         
         line_x = centroid(1) + [-a*cos(phi), a*cos(phi)];
         line_y = centroid(2) + [-a*sin(phi), a*sin(phi)];
-        plot(line_x, line_y, 'r-', 'LineWidth', 1.5);
+        plot(line_x, line_y, 'r-', 'Linelargeur', 1.5);
         text(centroid(1), centroid(2), sprintf('P=%.1f µm', diameter_microm), 'Color', 'blue', 'FontSize', 10, 'HorizontalAlignment', 'center');
         hold off;
         
