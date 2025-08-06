@@ -324,11 +324,11 @@ for k = 1:length(filenames)
     diameter_max = input('Enter the maximum diameter to detect (µm) : ');
     
     % Calculate surface
-    [hauteur, largeur, ~] = size(imageData);
-    total_image_surface = (hauteur * largeur)*pixel2microm*pixel2microm;
+    [Height, Width, ~] = size(imageData);
+    total_image_surface = (Height * Width)*pixel2microm*pixel2microm;
     
     % INTERACTIV MASK MULTIPLE
-    masque_interactif = true(hauteur, largeur);
+    masque_interactif = true(Height, Width);
     
     % Instructions pour l'utilisateur
     fprintf('\n=== Select zones to be masked ===\n');
@@ -818,6 +818,7 @@ sheet.Shapes.AddPicture(distribution_filename, 0, 1, 650, 50, 300, 200);
 sheet.Shapes.AddPicture(detection_filename, 0, 1, 1000, 50, 300, 250);
 workbook.Save;
 fprintf('\nSave results on a file\n');
+
 
 
 
